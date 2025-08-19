@@ -1,0 +1,308 @@
+<?php
+
+namespace App\Http\Controllers;
+
+
+use App\Models\Payment;
+use App\Models\Ticket;
+use App\Models\MpesaTransaction;
+use Illuminate\Http\Request;
+use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Http;
+use Carbon\Carbon;
+use App\Models\Event;
+use DB;
+
+class PaymentController extends Controller
+{
+
+    public function checkPayment($reference)
+{
+    // Find pending transaction
+    $payment = \DB::table('payments')->where('reference', $reference)->first();
+    if (!$payment) {
+        return ['error' => 'Transaction not found'];
+    }
+
+    // --- Get Token ---
+    $tokenRes = Http::withBasicAuth(env('MPESA_CONSUMER_KEY'), env('MPESA_CONSUMER_SECRET'))
+        ->get('https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials');
+    $accessToken = $tokenRes->json()['access_token'];
+
+    $timestamp = now()->format('YmdHis');
+    $password = base64_encode(env('MPESA_SHORTCODE') . env('MPESA_PASSKEY') . $timestamp);
+
+    // --- Query STK ---
+    $res = Http::withToken($accessToken)
+        ->post('https://api.safaricom.co.ke/mpesa/stkpushquery/v1/query', [
+            "BusinessShortCode" => env('MPESA_SHORTCODE'),
+            "Password" => $password,
+            "Timestamp" => $timestamp,
+            "CheckoutRequestID" => $payment->reference, // 🔴 if you saved CheckoutRequestID, use it here
+        ]);
+
+    $data = $res->json();
+
+    if (isset($data['ResultCode']) && $data['ResultCode'] == '0') {
+        // ✅ Payment successful
+        \DB::table('payments')->where('id', $payment->id)->update([
+            'status' => 'completed',
+            'mpesa_receipt' => $data['MpesaReceiptNumber'] ?? 'N/A',
+            'updated_at' => now(),
+        ]);
+
+        // Send SMS
+        $this->sendSms($payment->phone, "✅ Payment of KSh {$payment->amount} successful. Ref: {$payment->reference}. Enjoy your event!");
+    } elseif (isset($data['ResultCode']) && $data['ResultCode'] != '0') {
+        \DB::table('payments')->where('id', $payment->id)->update([
+            'status' => 'failed',
+            'updated_at' => now(),
+        ]);
+    }
+
+    return $data;
+}
+
+public function sendSms($phoneNumber, $message)
+{
+    $url = 'https://ujumbesms.co.ke/api/messaging'; 
+
+    $headers = [
+        "X-Authorization: YTBkOTE3OGNmNDg3ZDE2Y2NiMGIzNjg1ZTc0Mzg2",
+        "email: developer@automationeye.com",
+        "Cache-Control: no-cache",
+        "Content-Type: application/json"
+    ];
+
+    // Ensure numbers are always in array format (API usually expects an array)
+    $numbers = is_array($phoneNumber) ? $phoneNumber : [$phoneNumber];
+
+    $jsonBody = json_encode([
+        "data" => [
+            [
+                "message_bag" => [
+                    "numbers" => $numbers,
+                    "message" => $message,
+                    "sender"  => "DEPTHSMS"
+                ]
+            ]
+        ]
+    ]);
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => $jsonBody,
+        CURLOPT_HTTPHEADER     => $headers,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 30
+    ]);
+
+    try {
+        $response = curl_exec($ch);
+
+        if ($response === false) {
+            throw new \Exception('cURL Error: ' . curl_error($ch));
+        }
+
+        $decoded = json_decode($response, true);
+
+        // Return decoded response if JSON, otherwise raw response
+        return $decoded ?: $response;
+
+    } catch (\Exception $e) {
+        return ['error' => true, 'message' => $e->getMessage()];
+    } finally {
+        curl_close($ch);
+    }
+}
+
+
+
+    public function initiate(Request $request, Event $event)
+    {
+        // $request->validate([
+        //     'phone' => 'required|string|regex:/^(?:2547|2541)\d{7}$/',
+        //     'tickets' => 'required|integer|min:1|max:10',
+        // ]);
+    
+        $phone   = $request->phone;
+        $tickets = $request->tickets;
+        $amount  = $event->price * $tickets;
+    
+        // Generate reference
+        $reference = 'EVT-' . strtoupper(uniqid());
+    
+        // --- Get Token ---
+        $tokenRes = Http::withBasicAuth(env('MPESA_CONSUMER_KEY'), env('MPESA_CONSUMER_SECRET'))
+            ->get('https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials');
+        $accessToken = $tokenRes->json()['access_token'];
+    
+        $timestamp = now()->format('YmdHis');
+        $password = base64_encode(env('MPESA_SHORTCODE') . env('MPESA_PASSKEY') . $timestamp);
+    
+        // --- STK Request ---
+        $stkRes = Http::withToken($accessToken)
+            ->post('https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest', [
+                "BusinessShortCode" => env('MPESA_SHORTCODE'),
+                "Password" => $password,
+                "Timestamp" => $timestamp,
+                "TransactionType" => "CustomerPayBillOnline",
+                "Amount" => $amount,
+                "PartyA" => $phone,
+                "PartyB" => env('MPESA_SHORTCODE'),
+                "PhoneNumber" => $phone,
+                "CallBackURL" => env('MPESA_CALLBACK_URL'), // you can ignore this for now
+                "AccountReference" => $reference,
+                "TransactionDesc" => "Event Ticket Purchase"
+            ]);
+    
+        $stkJson = $stkRes->json();
+    
+        // --- Save Payment ---
+        \DB::table('payments')->insert([
+            'user_id'   => 1, // 0 if guest
+            'event_id'  => $event->id,
+            'phone'     => $phone,
+            'amount'    => $amount,
+            'reference' => $reference,
+            'status'    => 'pending',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    
+        return back()->with('success', 'STK push sent. Enter your M-Pesa PIN to complete payment.');
+    }
+    
+    public function initiatePayment(Request $request, Event $event)
+    {
+        $request->validate([
+            'phone' => 'required|string|max:12',
+            'tickets' => 'required|integer|min:1|max:' . $event->available_tickets
+        ]);
+
+        $amount = $event->price * $request->tickets;
+        $reference = 'TICKET-' . Str::random(8);
+
+        // Create payment record
+        $payment = Payment::create([
+            'user_id' => auth()->id(),
+            'event_id' => $event->id,
+            'phone' => $request->phone,
+            'amount' => $amount,
+            'reference' => $reference,
+            'status' => 'pending'
+        ]);
+
+        // Reserve tickets
+        for ($i = 0; $i < $request->tickets; $i++) {
+            Ticket::create([
+                'event_id' => $event->id,
+                'user_id' => auth()->id(),
+                'ticket_number' => 'TKT-' . Str::random(10),
+                'status' => 'reserved'
+            ]);
+        }
+
+        // Update available tickets
+        $event->decrement('available_tickets', $request->tickets);
+
+        // Initiate M-Pesa payment
+        return $this->initiateMpesaPayment($request->phone, $amount, $reference);
+    }
+
+    private function initiateMpesaPayment($phone, $amount, $reference)
+    {
+        // This is a simplified version - you'll need to implement the actual M-Pesa API integration
+        // For now, we'll simulate a successful payment
+        
+        $mpesa = new \Safaricom\Mpesa\Mpesa();
+        
+        try {
+            $response = $mpesa->STKPushSimulation(
+                config('mpesa.business_shortcode'),
+                config('mpesa.passkey'),
+                'CustomerPayBillOnline',
+                $amount,
+                $phone,
+                config('mpesa.business_shortcode'),
+                $phone,
+                route('payment.callback'),
+                $reference,
+                'Event Tickets Payment'
+            );
+            
+            // Process the response and update payment status
+            return redirect()->back()->with('success', 'Payment initiated successfully. Please check your phone to complete the payment.');
+            
+        } catch (\Exception $e) {
+            return redirect()->back()->with('error', 'Payment initiation failed: ' . $e->getMessage());
+        }
+    }
+
+    public function paymentCallback(Request $request)
+    {
+        // Process M-Pesa callback
+        $callbackData = json_decode($request->getContent());
+        
+        if (property_exists($callbackData, 'Body')) {
+            $stkCallback = $callbackData->Body->stkCallback;
+            $merchantRequestID = $stkCallback->MerchantRequestID;
+            $checkoutRequestID = $stkCallback->CheckoutRequestID;
+            $resultCode = $stkCallback->ResultCode;
+            $resultDesc = $stkCallback->ResultDesc;
+            
+            if ($resultCode == 0) {
+                // Payment was successful
+                $callbackMetadata = $stkCallback->CallbackMetadata->Item;
+                
+                $amount = $callbackMetadata[0]->Value;
+                $mpesaReceiptNumber = $callbackMetadata[1]->Value;
+                $transactionDate = $callbackMetadata[3]->Value;
+                $phoneNumber = $callbackMetadata[4]->Value;
+                
+                // Update payment status
+                $payment = Payment::where('reference', $checkoutRequestID)->first();
+                if ($payment) {
+                    $payment->update([
+                        'status' => 'completed',
+                        'mpesa_receipt' => $mpesaReceiptNumber
+                    ]);
+                    
+                    // Update tickets status
+                    Ticket::where('event_id', $payment->event_id)
+                         ->where('user_id', $payment->user_id)
+                         ->update(['status' => 'sold']);
+                }
+                
+                // Save transaction details
+                MpesaTransaction::create([
+                    'merchant_request_id' => $merchantRequestID,
+                    'checkout_request_id' => $checkoutRequestID,
+                    'result_code' => $resultCode,
+                    'result_desc' => $resultDesc,
+                    'amount' => $amount,
+                    'mpesa_receipt_number' => $mpesaReceiptNumber,
+                    'transaction_date' => $transactionDate,
+                    'phone_number' => $phoneNumber
+                ]);
+            } else {
+                // Payment failed
+                $payment = Payment::where('reference', $checkoutRequestID)->first();
+                if ($payment) {
+                    $payment->update(['status' => 'failed']);
+                    
+                    // Release reserved tickets
+                    $event = Event::find($payment->event_id);
+                    $event->increment('available_tickets', $payment->tickets_count);
+                    
+                    Ticket::where('event_id', $payment->event_id)
+                         ->where('user_id', $payment->user_id)
+                         ->delete();
+                }
+            }
+        }
+        
+        return response()->json(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
+    }
+}
