@@ -284,7 +284,7 @@
 <div class="events-container">
     <div class="container mx-auto px-4 py-8">
         <div class="events-header">
-            <h1 class="events-title">Upcoming Event</h1>
+            <h1 class="events-title">Upcoming Events</h1>
             <p class="events-subtitle">Discover amazing experiences waiting for you. Book your tickets in seconds with our secure platform.</p>
         </div>
         
