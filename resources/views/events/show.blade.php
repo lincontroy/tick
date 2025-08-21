@@ -426,7 +426,7 @@
                             }
                         @endphp
                         <span class="ticket-availability-badge {{ $ticketClass }}">
-                            {{ $event->available_tickets }} tickets left
+                           32 VIP tickets left
                         </span>
                     </h2>
                     
