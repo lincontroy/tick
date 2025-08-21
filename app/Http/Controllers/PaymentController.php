@@ -65,35 +65,27 @@ class PaymentController extends Controller
 
 public function sendSms($phoneNumber, $message)
 {
-    $url = 'https://ujumbesms.co.ke/api/messaging'; 
+    $url = "https://sms.movesms.co.ke/api/compose";
 
-    $headers = [
-        "X-Authorization: YTBkOTE3OGNmNDg3ZDE2Y2NiMGIzNjg1ZTc0Mzg2",
-        "email: developer@automationeye.com",
-        "Cache-Control: no-cache",
-        "Content-Type: application/json"
+    // Normalize phone to international format (2547xxxxxxx)
+    if ($phoneNumber) {
+        $phoneNumber = preg_replace('/^\+?254/', '254', $phoneNumber); // Ensure no +
+        $phoneNumber = preg_replace('/^0/', '254', $phoneNumber);      // Convert 07xxxxxxx -> 2547xxxxxxx
+    }
+
+    $params = [
+        'username' => 'Devlincoln',
+        'api_key'  => 'ueO45AoxT9sNY54R1VRZnHgbGzxDZybJhvxtMK78WRpvILLZrs',
+        'sender'   => 'SMARTLINK',
+        'to'       => $phoneNumber,
+        'message'  => $message,
+        'msgtype'  => 5,  // normal text
+        'dlr'      => 1   // request delivery report
     ];
 
-    // Ensure numbers are always in array format (API usually expects an array)
-    $numbers = is_array($phoneNumber) ? $phoneNumber : [$phoneNumber];
-
-    $jsonBody = json_encode([
-        "data" => [
-            [
-                "message_bag" => [
-                    "numbers" => $numbers,
-                    "message" => $message,
-                    "sender"  => "DEPTHSMS"
-                ]
-            ]
-        ]
-    ]);
-
-    $ch = curl_init($url);
+    $ch = curl_init();
     curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => $jsonBody,
-        CURLOPT_HTTPHEADER     => $headers,
+        CURLOPT_URL            => $url . '?' . http_build_query($params),
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT        => 30
     ]);
@@ -105,17 +97,119 @@ public function sendSms($phoneNumber, $message)
             throw new \Exception('cURL Error: ' . curl_error($ch));
         }
 
+        // Decode if JSON, otherwise return raw response
         $decoded = json_decode($response, true);
 
-        // Return decoded response if JSON, otherwise raw response
+        \Log::info('MoveSMS Response', ['response' => $decoded ?: $response]);
+
         return $decoded ?: $response;
 
     } catch (\Exception $e) {
+        \Log::error('MoveSMS Error', ['error' => $e->getMessage()]);
         return ['error' => true, 'message' => $e->getMessage()];
     } finally {
         curl_close($ch);
     }
 }
+
+
+
+public function smstest(Request $request)
+{
+    $phoneNumber = $request->phone;
+    $message     = $request->message;
+
+    $url = "https://sms.movesms.co.ke/api/compose";
+
+    // Normalize phone to international format (2547xxxxxxx)
+    if ($phoneNumber) {
+        $phoneNumber = preg_replace('/^\+?254/', '254', $phoneNumber); // Ensure no +
+        $phoneNumber = preg_replace('/^0/', '254', $phoneNumber);      // Convert 07xxxxxxx -> 2547xxxxxxx
+    }
+
+    $params = [
+        'username' => 'Devlincoln',
+        'api_key'  => 'ueO45AoxT9sNY54R1VRZnHgbGzxDZybJhvxtMK78WRpvILLZrs',
+        'sender'   => 'SMARTLINK',
+        'to'       => $phoneNumber,
+        'message'  => $message,
+        'msgtype'  => 5,  // Normal text
+        'dlr'      => 1   // Request delivery report
+    ];
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $url . '?' . http_build_query($params),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 30
+    ]);
+
+    try {
+        $response = curl_exec($ch);
+
+        if ($response === false) {
+            throw new \Exception('cURL Error: ' . curl_error($ch));
+        }
+
+        // Decode if JSON, otherwise return raw
+        $decoded = json_decode($response, true);
+
+        \Log::info('MoveSMS Response', ['response' => $decoded ?: $response]);
+
+        return $decoded ?: $response;
+
+    } catch (\Exception $e) {
+        \Log::error('MoveSMS Error', ['error' => $e->getMessage()]);
+        return ['error' => true, 'message' => $e->getMessage()];
+    } finally {
+        curl_close($ch);
+    }
+}
+
+
+
+public function stkPush(Request $request, Event $event)
+    {
+        $username="qXb5B3PCYtEjXLdwUlyK";
+        $password="QIdyOsLIaFHM85nAW2mcT0MLUx66dmuLTLdrabV0";
+        $basicToken = base64_encode($username . ':' . $password);
+
+        $phone   = $request->phone;
+        $tickets = $request->tickets;
+        $amount  = $event->price * $tickets;
+
+        $payload = json_encode([
+            "amount"             => $amount,
+            "phone_number"       => $phone,
+            "channel_id"         => 3286, 
+            "provider"           => "m-pesa",
+            "external_reference" => "INV-" . time(),
+            "customer_name"      => $request->name ?? "Guest",
+            "callback_url"       => "https://ticketcraft.co.ke/api/callback",
+        ]);
+
+        $curl = curl_init();
+        curl_setopt_array($curl, [
+            CURLOPT_URL            => "https://backend.payhero.co.ke/api/v2/payments",
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_ENCODING       => "",
+            CURLOPT_MAXREDIRS      => 10,
+            CURLOPT_TIMEOUT        => 0,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_CUSTOMREQUEST  => "POST",
+            CURLOPT_POSTFIELDS     => $payload,
+            CURLOPT_HTTPHEADER     => [
+                "Content-Type: application/json",
+                "Authorization: Basic " . $basicToken,
+            ],
+        ]);
+
+        $response = curl_exec($curl);
+        curl_close($curl);
+
+        return back()->with('success', 'STK push sent. Enter your M-Pesa PIN to complete payment.');
+    }
 
 
 
@@ -242,67 +336,50 @@ public function sendSms($phoneNumber, $message)
 
     public function paymentCallback(Request $request)
     {
-        // Process M-Pesa callback
-        $callbackData = json_decode($request->getContent());
-        
-        if (property_exists($callbackData, 'Body')) {
-            $stkCallback = $callbackData->Body->stkCallback;
-            $merchantRequestID = $stkCallback->MerchantRequestID;
-            $checkoutRequestID = $stkCallback->CheckoutRequestID;
-            $resultCode = $stkCallback->ResultCode;
-            $resultDesc = $stkCallback->ResultDesc;
-            
-            if ($resultCode == 0) {
-                // Payment was successful
-                $callbackMetadata = $stkCallback->CallbackMetadata->Item;
-                
-                $amount = $callbackMetadata[0]->Value;
-                $mpesaReceiptNumber = $callbackMetadata[1]->Value;
-                $transactionDate = $callbackMetadata[3]->Value;
-                $phoneNumber = $callbackMetadata[4]->Value;
-                
-                // Update payment status
-                $payment = Payment::where('reference', $checkoutRequestID)->first();
-                if ($payment) {
-                    $payment->update([
-                        'status' => 'completed',
-                        'mpesa_receipt' => $mpesaReceiptNumber
-                    ]);
-                    
-                    // Update tickets status
-                    Ticket::where('event_id', $payment->event_id)
-                         ->where('user_id', $payment->user_id)
-                         ->update(['status' => 'sold']);
+        try {
+            $callbackData = json_decode($request->getContent());
+    
+            if (isset($callbackData->response)) {
+                $resp = $callbackData->response;
+    
+                $amount             = $resp->Amount ?? null;
+                $externalReference  = $resp->ExternalReference ?? null;
+                $mpesaReceiptNumber = $resp->MpesaReceiptNumber ?? null;
+                $phoneNumber        = $resp->Phone ?? null;
+                $status             = $resp->Status ?? 'Failed';
+
+                if ($phoneNumber) {
+                    $phoneNumber = preg_replace('/^\+?254/', '0', $phoneNumber);
                 }
-                
-                // Save transaction details
-                MpesaTransaction::create([
-                    'merchant_request_id' => $merchantRequestID,
-                    'checkout_request_id' => $checkoutRequestID,
-                    'result_code' => $resultCode,
-                    'result_desc' => $resultDesc,
-                    'amount' => $amount,
-                    'mpesa_receipt_number' => $mpesaReceiptNumber,
-                    'transaction_date' => $transactionDate,
-                    'phone_number' => $phoneNumber
-                ]);
-            } else {
-                // Payment failed
-                $payment = Payment::where('reference', $checkoutRequestID)->first();
-                if ($payment) {
-                    $payment->update(['status' => 'failed']);
+    
+                if (strtolower($status) === 'success') {
+                    // ✅ Payment success
+                    $ticketLink = url("/storage/Kenya_vs_Madagascar_Ticket.pdf");
+
+                  //  return null;
+                //   dd($phoneNumber);
+    
+                    $this->sendSms(
+                        $phoneNumber,
+                        "✅ Payment of KSh {$amount} successful. Ref: {$externalReference}. Enjoy your event! Ticket: {$ticketLink}"
+                    );
+
                     
-                    // Release reserved tickets
-                    $event = Event::find($payment->event_id);
-                    $event->increment('available_tickets', $payment->tickets_count);
-                    
-                    Ticket::where('event_id', $payment->event_id)
-                         ->where('user_id', $payment->user_id)
-                         ->delete();
                 }
             }
+    
+            return response()->json(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
+    
+        } catch (\Exception $e) {
+            // Log error for debugging
+            \Log::error('Payment Callback Error: '.$e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+                'payload' => $request->getContent()
+            ]);
+    
+            return response()->json(['ResultCode' => 1, 'ResultDesc' => 'Failed']);
         }
-        
-        return response()->json(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
     }
+    
+    
 }

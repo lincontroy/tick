@@ -41,8 +41,12 @@ Route::get('/events', [EventController::class, 'index'])->name('events.index');
 Route::get('/events/{event}', [EventController::class, 'show'])->name('events.show');
 
 
-Route::post('/payment/initiate/{event}', [PaymentController::class, 'initiate'])
+// Route::post('/payment/initiate/{event}', [PaymentController::class, 'initiate'])
+//     ->name('payment.initiate');
+
+Route::post('/payment/initiate/{event}', [PaymentController::class, 'stkPush'])
     ->name('payment.initiate');
+
 
 // Payment routes
 Route::middleware('auth')->group(function () {

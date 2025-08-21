@@ -455,13 +455,14 @@
                             <div class="form-group">
                                 <label for="phone" class="form-label">M-Pesa Phone Number</label>
                                 <input type="text" 
-                                       name="phone" 
-                                       id="phone" 
-                                       class="form-control" 
-                                       placeholder="e.g., 254712345678" 
-                                       pattern="^254[0-9]{9}$" 
-                                       title="Phone number must start with 254 and be 12 digits long" 
-                                       required>
+                                name="phone" 
+                                id="phone" 
+                                class="form-control" 
+                                placeholder="e.g., 0712345678" 
+                                pattern="^07[0-9]{8}$" 
+                                title="Phone number must start with 07 and be 10 digits long" 
+                                required>
+                         
                             </div>
                             
                         </div>
