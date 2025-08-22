@@ -485,7 +485,7 @@
                         
                         <button type="submit" class="submit-button">
                             <i class="fas fa-mobile-alt"></i>
-                            Book VIP via M-Pesa
+                            Buy via M-Pesa
                         </button>
                     </form>
                     @else
